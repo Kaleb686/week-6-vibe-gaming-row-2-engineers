@@ -1,0 +1,10 @@
+Add a world map button
+Make it a sidescrolling platformer
+Add an offensive attack to deflect orbs
+Add gambling mechanics
+add a debug cheat menu with the plus key
+make it a rougelike
+
+
+
+MAKE IT AS DRAMATIC AS POSSIBLE

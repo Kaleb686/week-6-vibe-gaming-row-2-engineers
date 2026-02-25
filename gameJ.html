@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Epic RingWeasel</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background: #472c50;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            font-family: Arial, sans-serif;
+        }
+        
+        .game-container {
+            background: #34495e;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+        }
+        
+        canvas {
+            border: 3px solid #ecf0f1;
+            background: #000;
+            display: block;
+            border-radius: 5px;
+        }
+        
+        .controls {
+            color: white;
+            text-align: center;
+            margin-top: 15px;
+            font-size: 14px;
+        }
+        
+        .controls h3 {
+            margin: 0 0 10px 0;
+            color: #ecf0f1;
+        }
+        
+        .key {
+            background: #3498db;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 3px;
+            font-weight: bold;
+            margin: 0 2px;
+        }
+        .controls button, #mapButton {
+            margin-top: 10px;
+            padding: 6px 12px;
+            background: #e74c3c;
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        #mapOverlay button {
+            padding: 6px 12px;
+            background: #3498db;
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div class="game-container">
+        <canvas id="gameCanvas" width="800" height="600"></canvas>
+        <div class="controls">
+            <h3>Controls</h3>
+            <p>Use <span class="key">W</span><span class="key">A</span><span class="key">S</span><span class="key">D</span> to move, <span class="key">Space</span> to attack, <span class="key">G</span> gamble, <span class="key">+</span> cheat menu, <span class="key">M</span> map</p>
+            <p><button id="mapButton">World Map</button></p>
+        </div>
+        <div id="mapOverlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.9);color:#fff;font-size:24px;z-index:1000;display:flex;flex-direction:column;justify-content:center;align-items:center;">
+            <div>🌍 World Map 🌍</div>
+            <div style="margin-top:20px;"><button id="mapClose">Close Map</button></div>
+        </div>
+    </div>
+
+    <script>
+        class WeaselGame {
+            constructor() {
+                this.canvas = document.getElementById('gameCanvas');
+                this.ctx = this.canvas.getContext('2d');
+                
+                // Game settings
+                this.gameWidth = this.canvas.width;
+                this.gameHeight = this.canvas.height;
+                this.worldWidth = 3000; // width of the side‑scrolling world
+                this.cameraX = 0;
+                this.gravity = 0.5;
+                
+                // Player settings
+                this.player = {
+                    x: this.gameWidth / 2 - 32, // fixed in screen coords
+                    y: this.gameHeight - 100,
+                    width: 64,
+                    height: 64,
+                    speed: 5,
+                    image: null,
+                    imageLoaded: false,
+                    vx: 0,
+                    vy: 0,
+                    jumping: false
+                };
+                
+                // Input handling
+                this.keys = {
+                    w: false,
+                    a: false,
+                    s: false,
+                    d: false
+                };
+                
+                // Game state
+                this.gameState = 'playing'; // 'playing' or 'gameOver'
+                this.gameStartTime = Date.now();
+                this.gameEndTime = null;
+                
+                // Rings / orbs
+                this.rings = [];
+                this.ringSpawnDelay = 3000; // 3 seconds
+                this.lastRingSpawn = 0;
+                this.ringsSpawned = 0;
+                this.ringsDeflected = 0;
+                
+                // Platforms for platformer
+                this.platforms = [];
+                
+                // Attack state
+                this.attackState = { active: false, duration: 0 };
+                
+                // Gambling/credits and messages
+                this.credits = 0;
+                this.gambleMessage = '';
+                
+                // Cheat menu
+                this.cheatMenu = { show: false, godMode: false, speedMultiplier: 1 };
+                
+                // World map overlay
+                this.worldMapVisible = false;
+                
+                this.init();
+            }
+            
+            init() {
+                // Load player sprite
+                this.player.image = new Image();
+                this.player.image.onload = () => {
+                    this.player.imageLoaded = true;
+                };
+                this.player.image.onerror = () => {
+                    console.log('Could not load weasel.png, using placeholder');
+                    this.player.imageLoaded = false;
+                };
+                this.player.image.src = 'weasel.png';
+                
+                // Randomly generate platforms (roguelike)
+                this.generatePlatforms();
+                
+                // Input listeners
+                this.setupInputHandlers();
+                
+                // Dramatic opening
+                console.log('🌟 Chapter 1: The Weasel’s Journey Begins... 🌟');
+                
+                // Game loop
+                this.gameLoop();
+            }
+            
+            generatePlatforms() {
+                let x = 0;
+                while (x < this.worldWidth - 200) {
+                    const width = 200;
+                    const y = 300 + Math.random() * 200;
+                    this.platforms.push({ x, y, width, height: 20 });
+                    x += 300 + Math.random() * 200;
+                }
+            }
+            
+            setupInputHandlers() {
+                document.addEventListener('keydown', (e) => {
+                    if (this.gameState === 'gameOver') return;
+                    const key = e.key.toLowerCase();
+                    if (this.cheatMenu.show) {
+                        switch (key) {
+                            case '1':
+                                this.cheatMenu.godMode = !this.cheatMenu.godMode;
+                                break;
+                            case '2':
+                                this.player.speed *= 2;
+                                break;
+                            case '3':
+                                this.spawnRing();
+                                break;
+                        }
+                    }
+                    switch (key) {
+                        case 'w':
+                            if (!this.player.jumping) {
+                                this.player.vy = -10;
+                                this.player.jumping = true;
+                            }
+                            break;
+                        case 'a':
+                            this.keys.a = true;
+                            break;
+                        case 's':
+                            this.keys.s = true;
+                            break;
+                        case 'd':
+                            this.keys.d = true;
+                            break;
+                        case ' ':
+                            this.attack();
+                            break;
+                        case 'g':
+                            this.doGamble();
+                            break;
+                        case '+':
+                            this.cheatMenu.show = !this.cheatMenu.show;
+                            break;
+                        case 'm':
+                            this.toggleMap();
+                            break;
+                    }
+                    e.preventDefault();
+                });
+
+                document.addEventListener('keyup', (e) => {
+                    const key = e.key.toLowerCase();
+                    switch (key) {
+                        case 'a':
+                            this.keys.a = false;
+                            break;
+                        case 's':
+                            this.keys.s = false;
+                            break;
+                        case 'd':
+                            this.keys.d = false;
+                            break;
+                    }
+                    e.preventDefault();
+                });
+            }
+            
+            toggleMap() {
+                this.worldMapVisible = !this.worldMapVisible;
+                const overlay = document.getElementById('mapOverlay');
+                overlay.style.display = this.worldMapVisible ? 'flex' : 'none';
+            }
+            
+            attack() {
+                this.attackState.active = true;
+                this.attackState.duration = 15;
+                const px = this.cameraX + this.gameWidth / 2;
+                const py = this.player.y + this.player.height / 2;
+                for (let ring of this.rings) {
+                    const dx = ring.x - px;
+                    const dy = ring.y - py;
+                    const dist = Math.hypot(dx, dy);
+                    if (dist < ring.radius + 50) {
+                        const normalX = dx / dist;
+                        const normalY = dy / dist;
+                        ring.dx = normalX * ring.speed;
+                        ring.dy = normalY * ring.speed;
+                        this.ringsDeflected++;
+                        if (!this.cheatMenu.godMode) {
+                            this.credits += 1;
+                        }
+                    }
+                }
+            }
+            
+            doGamble() {
+                if (this.credits <= 0) {
+                    this.gambleMessage = 'No credits to gamble.';
+                    return;
+                }
+                this.credits--;
+                if (Math.random() < 0.5) {
+                    this.player.speed += 1;
+                    this.gambleMessage = 'Jackpot! Speed increased📈';
+                } else {
+                    this.player.speed = Math.max(1, this.player.speed - 1);
+                    this.gambleMessage = 'Bad roll... speed decreased📉';
+                }
+            }
+            
+            update() {
+                if (this.gameState === 'gameOver') return;
+                
+                // camera movement for side scroll
+                if (this.keys.d && this.cameraX < this.worldWidth - this.gameWidth) {
+                    this.cameraX += this.player.speed * this.cheatMenu.speedMultiplier;
+                }
+                if (this.keys.a && this.cameraX > 0) {
+                    this.cameraX -= this.player.speed * this.cheatMenu.speedMultiplier;
+                }
+                
+                // vertical physics
+                this.player.vy += this.gravity;
+                this.player.y += this.player.vy;
+                this.checkPlatformCollisions();
+                if (this.player.y + this.player.height > this.gameHeight) {
+                    this.player.y = this.gameHeight - this.player.height;
+                    this.player.vy = 0;
+                    this.player.jumping = false;
+                }
+                
+                // spawn rings
+                const currentTime = Date.now();
+                if (this.ringsSpawned < 3 && currentTime - this.gameStartTime > this.ringSpawnDelay * (this.ringsSpawned + 1)) {
+                    this.spawnRing();
+                    this.ringsSpawned++;
+                }
+                
+                this.updateRings();
+                if (this.attackState.active) {
+                    this.attackState.duration--;
+                    if (this.attackState.duration <= 0) {
+                        this.attackState.active = false;
+                    }
+                }
+                if (!this.cheatMenu.godMode) {
+                    this.checkCollisions();
+                }
+            }
+            
+            checkPlatformCollisions() {
+                for (let platform of this.platforms) {
+                    const px = this.cameraX + this.gameWidth / 2 - this.player.width / 2;
+                    if (this.player.vy >= 0 &&
+                        px + this.player.width > platform.x &&
+                        px < platform.x + platform.width &&
+                        this.player.y + this.player.height <= platform.y &&
+                        this.player.y + this.player.height + this.player.vy >= platform.y) {
+                        this.player.y = platform.y - this.player.height;
+                        this.player.vy = 0;
+                        this.player.jumping = false;
+                    }
+                }
+            }
+            
+            draw() {
+                // Clear canvas
+                this.ctx.clearRect(0, 0, this.gameWidth, this.gameHeight);
+                
+                // Draw background
+                this.drawBackground();
+                
+                // Platforms
+                this.drawPlatforms();
+                
+                // Rings
+                this.drawRings();
+                
+                // Player
+                this.drawPlayer();
+                
+                // Attack visual
+                if (this.attackState.active) {
+                    this.ctx.strokeStyle = 'yellow';
+                    this.ctx.lineWidth = 4;
+                    this.ctx.beginPath();
+                    this.ctx.arc(this.gameWidth/2, this.player.y+this.player.height/2, 60, 0, Math.PI*2);
+                    this.ctx.stroke();
+                }
+                
+                // UI
+                this.drawUI();
+                
+                // Cheat overlay
+                if (this.cheatMenu.show) {
+                    this.drawCheatMenu();
+                }
+                
+                // world map overlay on canvas
+                if (this.worldMapVisible) {
+                    this.ctx.fillStyle = 'rgba(0,0,0,0.5)';
+                    this.ctx.fillRect(0,0,this.gameWidth,this.gameHeight);
+                    this.ctx.fillStyle = '#fff';
+                    this.ctx.font = '30px Arial';
+                    this.ctx.textAlign = 'center';
+                    this.ctx.fillText('WORLD MAP (click close button)', this.gameWidth/2, this.gameHeight/2);
+                }
+                
+                if (this.gameState === 'gameOver') {
+                    this.drawGameOver();
+                }
+            }
+            
+            drawPlatforms() {
+                this.ctx.fillStyle = '#888';
+                for (let platform of this.platforms) {
+                    const x = platform.x - this.cameraX;
+                    this.ctx.fillRect(x, platform.y, platform.width, platform.height);
+                }
+            }
+            
+            spawnRing() {
+                const ring = {
+                    x: Math.random() * (this.worldWidth - 60) + 30,
+                    y: Math.random() * (this.gameHeight - 60) + 30,
+                    radius: 30,
+                    speed: 8 + (this.ringsSpawned * 2) + Math.random()*4,
+                    dx: (Math.random() - 0.5) * 2,
+                    dy: (Math.random() - 0.5) * 2
+                };
+                const length = Math.sqrt(ring.dx*ring.dx + ring.dy*ring.dy);
+                ring.dx = (ring.dx / length) * ring.speed;
+                ring.dy = (ring.dy / length) * ring.speed;
+                this.rings.push(ring);
+            }
+            
+            updateRings() {
+                for (let i = 0; i < this.rings.length; i++) {
+                    for (let j = i + 1; j < this.rings.length; j++) {
+                        this.checkRingCollision(this.rings[i], this.rings[j]);
+                    }
+                }
+                for (let ring of this.rings) {
+                    ring.x += ring.dx;
+                    ring.y += ring.dy;
+                    if (ring.x - ring.radius <= 0 || ring.x + ring.radius >= this.worldWidth) {
+                        ring.dx = -ring.dx;
+                        ring.x = Math.max(ring.radius, Math.min(this.worldWidth - ring.radius, ring.x));
+                    }
+                    if (ring.y - ring.radius <= 0 || ring.y + ring.radius >= this.gameHeight) {
+                        ring.dy = -ring.dy;
+                        ring.y = Math.max(ring.radius, Math.min(this.gameHeight - ring.radius, ring.y));
+                    }
+                }
+            }
+            
+            drawRings() {
+                this.ctx.strokeStyle = '#ff0000';
+                this.ctx.lineWidth = 4;
+                for (let ring of this.rings) {
+                    const x = ring.x - this.cameraX;
+                    this.ctx.beginPath();
+                    this.ctx.arc(x, ring.y, ring.radius, 0, Math.PI*2);
+                    this.ctx.stroke();
+                }
+            }
+            
+            drawBackground() {
+                this.ctx.fillStyle = '#2ecc71';
+                this.ctx.fillRect(0, 0, this.gameWidth, this.gameHeight);
+                this.ctx.fillStyle = '#27ae60';
+                for (let x = 0; x < this.gameWidth; x += 20) {
+                    for (let y = 0; y < this.gameHeight; y += 20) {
+                        if (Math.random() > 0.7) {
+                            this.ctx.fillRect(x, y, 2, 2);
+                        }
+                    }
+                }
+            }
+            
+            drawPlayer() {
+                const drawX = this.gameWidth/2;
+                if (this.player.imageLoaded && this.player.image.complete) {
+                    this.ctx.drawImage(this.player.image, drawX, this.player.y, this.player.width, this.player.height);
+                } else {
+                    this.ctx.fillStyle = '#8B4513';
+                    this.ctx.fillRect(drawX, this.player.y, this.player.width, this.player.height);
+                    this.ctx.fillStyle = '#654321';
+                    this.ctx.fillRect(drawX + 5, this.player.y + 5, 54, 54);
+                    this.ctx.fillStyle = '#000';
+                    this.ctx.fillRect(drawX + 15, this.player.y + 15, 8, 8);
+                    this.ctx.fillRect(drawX + 35, this.player.y + 15, 8, 8);
+                    this.ctx.fillStyle = '#FF69B4';
+                    this.ctx.fillRect(drawX + 28, this.player.y + 30, 6, 4);
+                    this.ctx.fillStyle = '#fff';
+                    this.ctx.font = '12px Arial';
+                    this.ctx.textAlign = 'center';
+                }
+            }
+            
+            drawUI() {
+                this.ctx.fillStyle = 'rgba(255,255,255,0.2)';
+                this.ctx.fillRect(10, 10, 240, 120);
+                this.ctx.fillStyle = '#fff';
+                this.ctx.font = '14px Arial';
+                this.ctx.textAlign = 'left';
+                const worldX = Math.round(this.cameraX + this.gameWidth/2);
+                this.ctx.fillText(`World X: ${worldX}`, 20, 30);
+                this.ctx.fillText(`Speed: ${this.player.speed}`, 20, 50);
+                this.ctx.fillText(`Rings deflected: ${this.ringsDeflected}`, 20, 70);
+                this.ctx.fillText(`Credits: ${this.credits}`, 20, 90);
+                this.ctx.fillText(this.gambleMessage, 20, 110);
+                const currentTime = this.gameState === 'gameOver' ? this.gameEndTime : Date.now();
+                const survivalTime = Math.floor((currentTime - this.gameStartTime) / 1000);
+                this.ctx.fillStyle = 'rgba(255,255,255,0.2)';
+                this.ctx.fillRect(this.gameWidth - 120, 10, 110, 30);
+                this.ctx.fillStyle = '#fff';
+                this.ctx.textAlign = 'right';
+                this.ctx.fillText(`Time: ${survivalTime}s`, this.gameWidth - 20, 30);
+            }
+            
+            drawCheatMenu() {
+                this.ctx.fillStyle = 'rgba(0,0,0,0.85)';
+                this.ctx.fillRect(50, 50, this.gameWidth-100, this.gameHeight-100);
+                this.ctx.fillStyle = '#ff0';
+                this.ctx.font = '20px Arial';
+                this.ctx.textAlign = 'left';
+                this.ctx.fillText('CHEAT MENU (1=god mode 2=double speed 3=spawn ring)', 60, 80);
+                this.ctx.fillText(`God mode: ${this.cheatMenu.godMode}`, 60, 110);
+                this.ctx.fillText(`Speed multiplier: ${this.cheatMenu.speedMultiplier}`, 60, 140);
+            }
+            
+            checkCollisions() {
+                const px = this.cameraX + this.gameWidth / 2;
+                const py = this.player.y + this.player.height / 2;
+                const playerRadius = Math.min(this.player.width, this.player.height) / 2;
+                for (let ring of this.rings) {
+                    const distance = Math.hypot(px - ring.x, py - ring.y);
+                    if (distance < playerRadius + ring.radius) {
+                        this.gameState = 'gameOver';
+                        this.gameEndTime = Date.now();
+                        return;
+                    }
+                }
+            }
+            
+            drawGameOver() {
+                this.ctx.fillStyle = 'rgba(0, 0, 0, 0.9)';
+                this.ctx.fillRect(0, 0, this.gameWidth, this.gameHeight);
+                this.ctx.fillStyle = '#ff0000';
+                this.ctx.font = 'bold 64px Impact';
+                this.ctx.textAlign = 'center';
+                this.ctx.fillText('YOU DIED', this.gameWidth / 2, this.gameHeight / 2 - 40);
+                const survivalTime = Math.floor((this.gameEndTime - this.gameStartTime) / 1000);
+                this.ctx.fillStyle = '#fff';
+                this.ctx.font = '24px Arial';
+                this.ctx.fillText(`Survived ${survivalTime} seconds`, this.gameWidth / 2, this.gameHeight / 2 + 20);
+                this.ctx.font = '18px Arial';
+                this.ctx.fillText('Refresh to try again (roguelike levels!)', this.gameWidth / 2, this.gameHeight / 2 + 60);
+            }
+            
+            gameLoop() {
+                this.update();
+                this.draw();
+                requestAnimationFrame(() => this.gameLoop());
+            }
+        }
+        
+        window.addEventListener('load', () => {
+            window.gameInstance = new WeaselGame();
+            document.getElementById('mapButton').addEventListener('click', () => {
+                window.gameInstance.toggleMap();
+            });
+            document.getElementById('mapClose').addEventListener('click', () => {
+                window.gameInstance.toggleMap();
+            });
+        });
+    </script>
+</body>
+</html>
+                this.drawRings();
+                
+                // Draw player
+                this.drawPlayer();
+                
+                // Draw UI
+                this.drawUI();
+                
+                // Draw game over screen if needed
+                if (this.gameState === 'gameOver') {
+                    this.drawGameOver();
+                }
+            }
+            
+            spawnRing() {
+                const ring = {
+                    x: Math.random() * (this.gameWidth - 60),
+                    y: Math.random() * (this.gameHeight - 60),
+                    radius: 30,
+                    speed: 8 + (this.ringsSpawned * 2), // Ring 1: 8, Ring 2: 10, Ring 3: 12
+                    dx: (Math.random() - 0.5) * 2, // Random direction
+                    dy: (Math.random() - 0.5) * 2
+                };
+                
+                // Normalize direction vector
+                const length = Math.sqrt(ring.dx * ring.dx + ring.dy * ring.dy);
+                ring.dx = (ring.dx / length) * ring.speed;
+                ring.dy = (ring.dy / length) * ring.speed;
+                
+                this.rings.push(ring);
+            }
+            
+            updateRings() {
+                // Check ring-to-ring collisions first
+                for (let i = 0; i < this.rings.length; i++) {
+                    for (let j = i + 1; j < this.rings.length; j++) {
+                        this.checkRingCollision(this.rings[i], this.rings[j]);
+                    }
+                }
+                
+                // Update ring positions
+                for (let ring of this.rings) {
+                    // Move ring
+                    ring.x += ring.dx;
+                    ring.y += ring.dy;
+                    
+                    // Bounce off walls
+                    if (ring.x - ring.radius <= 0 || ring.x + ring.radius >= this.gameWidth) {
+                        ring.dx = -ring.dx;
+                        ring.x = Math.max(ring.radius, Math.min(this.gameWidth - ring.radius, ring.x));
+                    }
+                    if (ring.y - ring.radius <= 0 || ring.y + ring.radius >= this.gameHeight) {
+                        ring.dy = -ring.dy;
+                        ring.y = Math.max(ring.radius, Math.min(this.gameHeight - ring.radius, ring.y));
+                    }
+                }
+            }
+            
+            checkRingCollision(ring1, ring2) {
+                const dx = ring2.x - ring1.x;
+                const dy = ring2.y - ring1.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                
+                if (distance < ring1.radius + ring2.radius) {
+                    // Calculate collision normal
+                    const normalX = dx / distance;
+                    const normalY = dy / distance;
+                    
+                    // Separate rings to prevent overlap
+                    const overlap = ring1.radius + ring2.radius - distance;
+                    const separationX = normalX * overlap * 0.5;
+                    const separationY = normalY * overlap * 0.5;
+                    
+                    ring1.x -= separationX;
+                    ring1.y -= separationY;
+                    ring2.x += separationX;
+                    ring2.y += separationY;
+                    
+                    // Calculate relative velocity
+                    const relativeVelocityX = ring2.dx - ring1.dx;
+                    const relativeVelocityY = ring2.dy - ring1.dy;
+                    
+                    // Calculate relative velocity along normal
+                    const velocityAlongNormal = relativeVelocityX * normalX + relativeVelocityY * normalY;
+                    
+                    // Don't resolve if objects are separating
+                    if (velocityAlongNormal > 0) return;
+                    
+                    // Calculate impulse scalar (assuming equal mass)
+                    const impulse = -2 * velocityAlongNormal / 2;
+                    
+                    // Apply impulse to velocities
+                    ring1.dx -= impulse * normalX;
+                    ring1.dy -= impulse * normalY;
+                    ring2.dx += impulse * normalX;
+                    ring2.dy += impulse * normalY;
+                }
+            }
+            
+            checkCollisions() {
+                const playerCenterX = this.player.x + this.player.width / 2;
+                const playerCenterY = this.player.y + this.player.height / 2;
+                const playerRadius = Math.min(this.player.width, this.player.height) / 2;
+                
+                for (let ring of this.rings) {
+                    const distance = Math.sqrt(
+                        Math.pow(playerCenterX - ring.x, 2) + 
+                        Math.pow(playerCenterY - ring.y, 2)
+                    );
+                    
+                    if (distance < playerRadius + ring.radius) {
+                        this.gameState = 'gameOver';
+                        this.gameEndTime = Date.now();
+                        return;
+                    }
+                }
+            }
+            
+            drawRings() {
+                this.ctx.strokeStyle = '#ff0000';
+                this.ctx.lineWidth = 4;
+                
+                for (let ring of this.rings) {
+                    this.ctx.beginPath();
+                    this.ctx.arc(ring.x, ring.y, ring.radius, 0, Math.PI * 2);
+                    this.ctx.stroke();
+                }
+            }
+            
+            drawBackground() {
+                // Create a simple grass pattern
+                this.ctx.fillStyle = '#2ecc71';
+                this.ctx.fillRect(0, 0, this.gameWidth, this.gameHeight);
+                
+                // Add some texture with darker green dots
+                this.ctx.fillStyle = '#27ae60';
+                for (let x = 0; x < this.gameWidth; x += 20) {
+                    for (let y = 0; y < this.gameHeight; y += 20) {
+                        if (Math.random() > 0.7) {
+                            this.ctx.fillRect(x, y, 2, 2);
+                        }
+                    }
+                }
+            }
+            
+            drawPlayer() {
+                if (this.player.imageLoaded && this.player.image.complete) {
+                    // Draw the weasel image
+                    this.ctx.drawImage(
+                        this.player.image,
+                        this.player.x,
+                        this.player.y,
+                        this.player.width,
+                        this.player.height
+                    );
+                } else {
+                    // Draw placeholder if image not loaded
+                    this.ctx.fillStyle = '#8B4513';
+                    this.ctx.fillRect(this.player.x, this.player.y, this.player.width, this.player.height);
+                    
+                    // Add some basic weasel features
+                    this.ctx.fillStyle = '#654321';
+                    this.ctx.fillRect(this.player.x + 5, this.player.y + 5, 54, 54);
+                    
+                    // Eyes
+                    this.ctx.fillStyle = '#000';
+                    this.ctx.fillRect(this.player.x + 15, this.player.y + 15, 8, 8);
+                    this.ctx.fillRect(this.player.x + 35, this.player.y + 15, 8, 8);
+                    
+                    // Nose
+                    this.ctx.fillStyle = '#FF69B4';
+                    this.ctx.fillRect(this.player.x + 28, this.player.y + 30, 6, 4);
+                    
+                    // Label
+                    this.ctx.fillStyle = '#fff';
+                    this.ctx.font = '12px Arial';
+                    this.ctx.textAlign = 'center';
+                }
+            }
+            
+            drawUI() {
+                // Draw position indicator
+                this.ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+                this.ctx.fillRect(10, 10, 200, 80);
+                
+                this.ctx.fillStyle = '#fff';
+                this.ctx.font = '14px Arial';
+                this.ctx.textAlign = 'left';
+                this.ctx.fillText(`Position: ${Math.round(this.player.x)}, ${Math.round(this.player.y)}`, 20, 30);
+                this.ctx.fillText(`Speed: ${this.player.speed}`, 20, 50);
+                this.ctx.fillText(`Rings: ${this.rings.length}/3`, 20, 70);
+                
+                // Draw survival time
+                const currentTime = this.gameState === 'gameOver' ? this.gameEndTime : Date.now();
+                const survivalTime = Math.floor((currentTime - this.gameStartTime) / 1000);
+                this.ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+                this.ctx.fillRect(this.gameWidth - 120, 10, 110, 30);
+                this.ctx.fillStyle = '#fff';
+                this.ctx.textAlign = 'right';
+                this.ctx.fillText(`Time: ${survivalTime}s`, this.gameWidth - 20, 30);
+            }
+            
+            drawGameOver() {
+                // Draw overlay
+                this.ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+                this.ctx.fillRect(0, 0, this.gameWidth, this.gameHeight);
+                
+                // Draw game over text
+                this.ctx.fillStyle = '#ff0000';
+                this.ctx.font = 'bold 48px Arial';
+                this.ctx.textAlign = 'center';
+                this.ctx.fillText('GAME OVER', this.gameWidth / 2, this.gameHeight / 2 - 40);
+                
+                const survivalTime = Math.floor((this.gameEndTime - this.gameStartTime) / 1000);
+                this.ctx.fillStyle = '#fff';
+                this.ctx.font = '24px Arial';
+                this.ctx.fillText(`You survived ${survivalTime} seconds!`, this.gameWidth / 2, this.gameHeight / 2 + 20);
+                
+                this.ctx.font = '18px Arial';
+                this.ctx.fillText('Refresh to play again', this.gameWidth / 2, this.gameHeight / 2 + 60);
+            }
+            
+            gameLoop() {
+                this.update();
+                this.draw();
+                requestAnimationFrame(() => this.gameLoop());
+            }
+        }
+        
+        // Start the game when page loads
+        window.addEventListener('load', () => {
+            new WeaselGame();
+        });
+    </script>
+</body>
+</html>
