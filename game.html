@@ -57,7 +57,9 @@
         <canvas id="gameCanvas" width="800" height="600"></canvas>
         <div class="controls">
             <h3>Controls</h3>
-            <p>Use <span class="key">W</span><span class="key">A</span><span class="key">S</span><span class="key">D</span> keys to move the weasel</p>
+            <p>Use <span class="key">W</span><span class="key">A</span><span class="key">S</span><span class="key">D</span> to move. Press <span class="key">L</span> to open a lootbox.</p>
+            <p>Watch the yellow circle for upcoming ring spawns.</p>
+            <p><button id="paypalButton">Buy a skin / Donate</button></p>
         </div>
     </div>
 
@@ -65,7 +67,7 @@
         class WeaselGame {
             constructor() {
                 this.canvas = document.getElementById('gameCanvas');
-                this.ctx = this.canvas.getContext('2d');
+        this.ctx = this.canvas.getContext('2d');
                 
                 // Game settings
                 this.gameWidth = this.canvas.width;
@@ -79,7 +81,9 @@
                     height: 64,
                     speed: 5,
                     image: null,
-                    imageLoaded: false
+                    imageLoaded: false,
+                    shapeIndex: 0,
+                    shapes: ['square','circle','triangle']
                 };
                 
                 // Input handling
@@ -97,9 +101,32 @@
                 
                 // Rings
                 this.rings = [];
+
+                // Puppy background
+                this.puppyImage = new Image();
+                this.puppyPattern = null;
                 this.ringSpawnDelay = 3000; // 3 seconds
                 this.lastRingSpawn = 0;
                 this.ringsSpawned = 0;
+
+                // Upcoming spawn preview
+                this.nextRingPosition = null;
+                this.previewShown = false;
+                this.previewDuration = 1000; // ms before spawn
+                
+                // Battlepass & lootboxes
+                this.battlepassLevel = 1;
+                this.battlepassXP = 0;
+                this.lastXPUpdate = 0;
+                this.lootboxes = 0;
+
+                // Minimap settings
+                this.minimapWidth = 200;
+                this.minimapHeight = 150;
+
+                // player shape timer
+                this.lastShapeChange = 0;
+                this.shapeChangeInterval = 5000; // every 5 seconds
                 
                 this.init();
             }
@@ -115,6 +142,12 @@
                     this.player.imageLoaded = false;
                 };
                 this.player.image.src = 'weasel.png';
+
+                // load puppy image for background
+                this.puppyImage.src = 'puppy.png';
+                this.puppyImage.onload = () => {
+                    this.puppyPattern = this.ctx.createPattern(this.puppyImage, 'repeat');
+                };
                 
                 // Set up event listeners
                 this.setupInputHandlers();
@@ -138,9 +171,23 @@
                         case 'd':
                             this.keys.d = true;
                             break;
+                        case 'l':
+                            if (this.lootboxes > 0) {
+                                this.openLootbox();
+                            }
+                            break;
                     }
                     e.preventDefault();
                 });
+
+                // paypal button handler
+                const btn = document.getElementById('paypalButton');
+                if (btn) {
+                    btn.addEventListener('click', () => {
+                        // use PayPal.me link with provided username
+                        window.open('https://www.paypal.me/KalebDLC', '_blank');
+                    });
+                }
                 
                 document.addEventListener('keyup', (e) => {
                     switch(e.key.toLowerCase()) {
@@ -164,13 +211,44 @@
             update() {
                 if (this.gameState === 'gameOver') return;
                 
-                // Spawn rings every 3 seconds
+                // Spawn rings every 3 seconds with preview
                 const currentTime = Date.now();
-                if (this.ringsSpawned < 3 && currentTime - this.gameStartTime > this.ringSpawnDelay * (this.ringsSpawned + 1)) {
-                    this.spawnRing();
-                    this.ringsSpawned++;
+                const nextSpawnTime = this.gameStartTime + this.ringSpawnDelay * (this.ringsSpawned + 1);
+
+                if (this.ringsSpawned < 3) {
+                    // show a preview marker one second before spawn
+                    if (!this.previewShown && currentTime >= nextSpawnTime - this.previewDuration) {
+                        this.nextRingPosition = {
+                            x: Math.random() * (this.gameWidth - 60) + 30,
+                            y: Math.random() * (this.gameHeight - 60) + 30
+                        };
+                        this.previewShown = true;
+                    }
+                    // actually spawn the ring at the previewed location
+                    if (this.previewShown && currentTime >= nextSpawnTime) {
+                        this.spawnRing(this.nextRingPosition);
+                        this.ringsSpawned++;
+                        this.previewShown = false;
+                        this.nextRingPosition = null;
+                    }
                 }
                 
+                // Battlepass XP accrual
+                const elapsedSec = Math.floor((currentTime - this.gameStartTime) / 1000);
+                if (elapsedSec > this.lastXPUpdate) {
+                    this.lastXPUpdate = elapsedSec;
+                    this.battlepassXP += 10;
+                    if (this.battlepassXP >= 100) {
+                        this.battlepassXP -= 100;
+                        this.battlepassLevel++;
+                    }
+                }
+
+                // randomize player shape periodically
+                if (currentTime - this.lastShapeChange >= this.shapeChangeInterval) {
+                    this.lastShapeChange = currentTime;
+                    this.player.shapeIndex = (this.player.shapeIndex + 1) % this.player.shapes.length;
+                }                
                 // Handle movement
                 if (this.keys.w) {
                     this.player.y -= this.player.speed;
@@ -200,10 +278,18 @@
                 // Clear canvas
                 this.ctx.clearRect(0, 0, this.gameWidth, this.gameHeight);
                 
-                // Draw black background
-                this.ctx.fillStyle = '#000';
-                this.ctx.fillRect(0, 0, this.gameWidth, this.gameHeight);
+                // Draw puppy/grass background
+                this.drawBackground();
                 
+                // Draw preview for upcoming ring
+                if (this.previewShown && this.nextRingPosition) {
+                    this.ctx.strokeStyle = 'rgba(255, 255, 0, 0.7)';
+                    this.ctx.lineWidth = 2;
+                    this.ctx.beginPath();
+                    this.ctx.arc(this.nextRingPosition.x, this.nextRingPosition.y, 30, 0, Math.PI * 2);
+                    this.ctx.stroke();
+                }
+
                 // Draw rings
                 this.drawRings();
                 
@@ -212,6 +298,9 @@
                 
                 // Draw UI
                 this.drawUI();
+
+                // Draw minimap
+                this.drawMinimap();
                 
                 // Draw game over screen if needed
                 if (this.gameState === 'gameOver') {
@@ -219,10 +308,13 @@
                 }
             }
             
-            spawnRing() {
+            spawnRing(position = null) {
+                const xPos = position ? position.x : Math.random() * (this.gameWidth - 60);
+                const yPos = position ? position.y : Math.random() * (this.gameHeight - 60);
+
                 const ring = {
-                    x: Math.random() * (this.gameWidth - 60),
-                    y: Math.random() * (this.gameHeight - 60),
+                    x: xPos,
+                    y: yPos,
                     radius: 30,
                     speed: 8 + (this.ringsSpawned * 2), // Ring 1: 8, Ring 2: 10, Ring 3: 12
                     dx: (Math.random() - 0.5) * 2, // Random direction
@@ -235,6 +327,9 @@
                 ring.dy = (ring.dy / length) * ring.speed;
                 
                 this.rings.push(ring);
+
+                // reward the player with a lootbox for every ring spawned
+                this.lootboxes++;
             }
             
             updateRings() {
@@ -323,6 +418,22 @@
                 }
             }
             
+            openLootbox() {
+                if (this.lootboxes <= 0) return;
+                const choice = Math.random();
+                if (choice < 0.5) {
+                    this.player.speed += 1;
+                    alert('You opened a lootbox and got a speed boost!');
+                } else {
+                    this.battlepassXP += 50;
+                    if (this.battlepassXP >= 100) {
+                        this.battlepassXP -= 100;
+                        this.battlepassLevel++;
+                    }
+                    alert('You opened a lootbox and got 50 XP!');
+                }
+            }
+            
             drawRings() {
                 this.ctx.strokeStyle = '#ff0000';
                 this.ctx.lineWidth = 4;
@@ -335,11 +446,16 @@
             }
             
             drawBackground() {
-                // Create a simple grass pattern
-                this.ctx.fillStyle = '#2ecc71';
-                this.ctx.fillRect(0, 0, this.gameWidth, this.gameHeight);
+                // draw puppy background if loaded, otherwise fallback to grass
+                if (this.puppyPattern) {
+                    this.ctx.fillStyle = this.puppyPattern;
+                    this.ctx.fillRect(0, 0, this.gameWidth, this.gameHeight);
+                } else {
+                    this.ctx.fillStyle = '#2ecc71';
+                    this.ctx.fillRect(0, 0, this.gameWidth, this.gameHeight);
+                }
                 
-                // Add some texture with darker green dots
+                // add some texture dots
                 this.ctx.fillStyle = '#27ae60';
                 for (let x = 0; x < this.gameWidth; x += 20) {
                     for (let y = 0; y < this.gameHeight; y += 20) {
@@ -351,8 +467,9 @@
             }
             
             drawPlayer() {
+                const shape = this.player.shapes[this.player.shapeIndex];
                 if (this.player.imageLoaded && this.player.image.complete) {
-                    // Draw the weasel image
+                    // draw image normally
                     this.ctx.drawImage(
                         this.player.image,
                         this.player.x,
@@ -361,34 +478,41 @@
                         this.player.height
                     );
                 } else {
-                    // Draw placeholder if image not loaded
-                    this.ctx.fillStyle = '#8B4513';
-                    this.ctx.fillRect(this.player.x, this.player.y, this.player.width, this.player.height);
-                    
-                    // Add some basic weasel features
-                    this.ctx.fillStyle = '#654321';
-                    this.ctx.fillRect(this.player.x + 5, this.player.y + 5, 54, 54);
-                    
-                    // Eyes
+                    // draw placeholder shape based on current shape
+                    switch(shape) {
+                        case 'square':
+                            this.ctx.fillStyle = '#8B4513';
+                            this.ctx.fillRect(this.player.x, this.player.y, this.player.width, this.player.height);
+                            break;
+                        case 'circle':
+                            this.ctx.fillStyle = '#8B4513';
+                            this.ctx.beginPath();
+                            this.ctx.arc(this.player.x + this.player.width/2, this.player.y + this.player.height/2, this.player.width/2, 0, Math.PI*2);
+                            this.ctx.fill();
+                            break;
+                        case 'triangle':
+                            this.ctx.fillStyle = '#8B4513';
+                            this.ctx.beginPath();
+                            this.ctx.moveTo(this.player.x + this.player.width/2, this.player.y);
+                            this.ctx.lineTo(this.player.x, this.player.y + this.player.height);
+                            this.ctx.lineTo(this.player.x + this.player.width, this.player.y + this.player.height);
+                            this.ctx.closePath();
+                            this.ctx.fill();
+                            break;
+                    }
+                    // draw eyes/nose regardless on shape
                     this.ctx.fillStyle = '#000';
                     this.ctx.fillRect(this.player.x + 15, this.player.y + 15, 8, 8);
                     this.ctx.fillRect(this.player.x + 35, this.player.y + 15, 8, 8);
-                    
-                    // Nose
                     this.ctx.fillStyle = '#FF69B4';
                     this.ctx.fillRect(this.player.x + 28, this.player.y + 30, 6, 4);
-                    
-                    // Label
-                    this.ctx.fillStyle = '#fff';
-                    this.ctx.font = '12px Arial';
-                    this.ctx.textAlign = 'center';
                 }
             }
             
             drawUI() {
-                // Draw position indicator
+                // Draw position indicator and stats
                 this.ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
-                this.ctx.fillRect(10, 10, 200, 80);
+                this.ctx.fillRect(10, 10, 200, 140);
                 
                 this.ctx.fillStyle = '#fff';
                 this.ctx.font = '14px Arial';
@@ -396,6 +520,9 @@
                 this.ctx.fillText(`Position: ${Math.round(this.player.x)}, ${Math.round(this.player.y)}`, 20, 30);
                 this.ctx.fillText(`Speed: ${this.player.speed}`, 20, 50);
                 this.ctx.fillText(`Rings: ${this.rings.length}/3`, 20, 70);
+                this.ctx.fillText(`BP Lv: ${this.battlepassLevel}`, 20, 90);
+                this.ctx.fillText(`XP: ${this.battlepassXP}/100`, 20, 110);
+                this.ctx.fillText(`Lootboxes: ${this.lootboxes}`, 20, 130);
                 
                 // Draw survival time
                 const currentTime = this.gameState === 'gameOver' ? this.gameEndTime : Date.now();
@@ -405,6 +532,45 @@
                 this.ctx.fillStyle = '#fff';
                 this.ctx.textAlign = 'right';
                 this.ctx.fillText(`Time: ${survivalTime}s`, this.gameWidth - 20, 30);
+            }
+            
+            drawMinimap() {
+                const scaleX = this.minimapWidth / this.gameWidth;
+                const scaleY = this.minimapHeight / this.gameHeight;
+                const offsetX = this.gameWidth - this.minimapWidth - 10;
+                const offsetY = this.gameHeight - this.minimapHeight - 10;
+            
+                // background
+                this.ctx.fillStyle = 'rgba(0,0,0,0.5)';
+                this.ctx.fillRect(offsetX, offsetY, this.minimapWidth, this.minimapHeight);
+            
+                // rings
+                for (let ring of this.rings) {
+                    const x = offsetX + ring.x * scaleX;
+                    const y = offsetY + ring.y * scaleY;
+                    this.ctx.fillStyle = 'red';
+                    this.ctx.beginPath();
+                    this.ctx.arc(x, y, 3, 0, Math.PI * 2);
+                    this.ctx.fill();
+                }
+            
+                // preview ring
+                if (this.previewShown && this.nextRingPosition) {
+                    const x = offsetX + this.nextRingPosition.x * scaleX;
+                    const y = offsetY + this.nextRingPosition.y * scaleY;
+                    this.ctx.fillStyle = 'rgba(255,255,0,0.7)';
+                    this.ctx.beginPath();
+                    this.ctx.arc(x, y, 3, 0, Math.PI * 2);
+                    this.ctx.fill();
+                }
+            
+                // player
+                const px = offsetX + (this.player.x + this.player.width / 2) * scaleX;
+                const py = offsetY + (this.player.y + this.player.height / 2) * scaleY;
+                this.ctx.fillStyle = 'white';
+                this.ctx.beginPath();
+                this.ctx.arc(px, py, 4, 0, Math.PI * 2);
+                this.ctx.fill();
             }
             
             drawGameOver() {
