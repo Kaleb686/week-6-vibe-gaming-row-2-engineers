@@ -414,8 +414,14 @@
                     dy: (Math.random() - 0.5) * 2
                 };
                 const length = Math.sqrt(ring.dx*ring.dx + ring.dy*ring.dy);
-                ring.dx = (ring.dx / length) * ring.speed;
-                ring.dy = (ring.dy / length) * ring.speed;
+                // Prevent division by zero
+                if (length > 0) {
+                    ring.dx = (ring.dx / length) * ring.speed;
+                    ring.dy = (ring.dy / length) * ring.speed;
+                } else {
+                    ring.dx = ring.speed;
+                    ring.dy = 0;
+                }
                 this.rings.push(ring);
             }
             
@@ -627,6 +633,9 @@
                 const distance = Math.sqrt(dx * dx + dy * dy);
                 
                 if (distance < ring1.radius + ring2.radius) {
+                    // Prevent division by zero when rings are at same position
+                    if (distance === 0) return;
+                    
                     // Calculate collision normal
                     const normalX = dx / distance;
                     const normalY = dy / distance;
